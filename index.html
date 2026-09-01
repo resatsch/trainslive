@@ -112,36 +112,61 @@ function render(tbodyId, label, deps) {
   }).join("");
 }
 
+let lastFetch = 0;
+
 async function loadStop(stop) {
-  const res = await fetch(API + "?globalId=" + stop.globalId + "&limit=40");
+  // cache-busting timestamp + no-store so an app resume never shows stale data
+  const res = await fetch(API + "?globalId=" + stop.globalId + "&limit=40&_=" + Date.now(), { cache: "no-store" });
   if (!res.ok) throw new Error("HTTP " + res.status);
   const data = await res.json();
-  const deps = data
+  stop.deps = data
     .filter(d => d.label === stop.label && !d.cancelled)
     .filter(d => !stop.excludeDestination || d.destination !== stop.excludeDestination)
-    .filter(d => (d.realtimeDepartureTime || d.plannedDepartureTime) > Date.now() - 30000)
-    .sort((a, b) => (a.realtimeDepartureTime || a.plannedDepartureTime) - (b.realtimeDepartureTime || b.plannedDepartureTime))
-    .slice(0, MAX);
-  render(stop.tbody, stop.label, deps);
+    .sort((a, b) => (a.realtimeDepartureTime || a.plannedDepartureTime) - (b.realtimeDepartureTime || b.plannedDepartureTime));
+}
+
+function renderAll() {
+  // recompute "in x min" from the departure timestamps we already have,
+  // dropping departures that are now in the past
+  for (const stop of STOPS) {
+    if (!stop.deps) continue;
+    const upcoming = stop.deps
+      .filter(d => (d.realtimeDepartureTime || d.plannedDepartureTime) > Date.now() - 30000)
+      .slice(0, MAX);
+    render(stop.tbody, stop.label, upcoming);
+  }
 }
 
 async function refresh() {
   const status = document.getElementById("status");
   try {
     await Promise.all(STOPS.map(loadStop));
+    lastFetch = Date.now();
+    renderAll();
     status.className = "status";
     status.textContent = "Stand: " + new Date().toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
   } catch (e) {
+    renderAll(); // at least recompute minutes from known timetable
     status.className = "status error";
     status.textContent = "Daten konnten nicht geladen werden – neuer Versuch gleich.";
   }
 }
 
+// Refresh immediately when the app is (re)opened from the home screen.
+// iOS/Android fire different events on resume, so listen to all of them;
+// wakeRefresh de-duplicates so we fetch at most once per few seconds.
+function wakeRefresh() {
+  if (document.hidden) return;
+  renderAll(); // instantly correct the minutes on screen
+  if (Date.now() - lastFetch > 5000) refresh();
+}
+document.addEventListener("visibilitychange", wakeRefresh);
+window.addEventListener("pageshow", wakeRefresh);
+window.addEventListener("focus", wakeRefresh);
+
 refresh();
-setInterval(refresh, 30000);
-document.addEventListener("visibilitychange", () => {
-  if (!document.hidden) refresh();
-});
+setInterval(refresh, 30000);      // fetch fresh data
+setInterval(renderAll, 10000);    // keep the minutes counting down between fetches
 </script>
 </body>
 </html>

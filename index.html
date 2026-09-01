@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b1220">
+<title>Arabellapark Abfahrten</title>
+<style>
+  :root {
+    --bg: #0b1220;
+    --card: #141e33;
+    --row: #1b2742;
+    --text: #f2f5fa;
+    --muted: #8fa0bd;
+    --u4: #00a984;   /* MVG U4 green */
+    --t17: #e30613;  /* MVG tram red */
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    min-height: 100vh;
+    padding: 16px 14px calc(16px + env(safe-area-inset-bottom));
+    max-width: 480px;
+    margin: 0 auto;
+  }
+  header { text-align: center; margin-bottom: 14px; }
+  header h1 { font-size: 1.15rem; font-weight: 600; }
+  header p { color: var(--muted); font-size: 0.8rem; margin-top: 2px; }
+  section {
+    background: var(--card);
+    border-radius: 14px;
+    padding: 12px;
+    margin-bottom: 14px;
+  }
+  .line-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .badge {
+    font-weight: 700;
+    font-size: 0.95rem;
+    color: #fff;
+    padding: 3px 10px;
+    border-radius: 6px;
+  }
+  .badge.u4 { background: var(--u4); }
+  .badge.t17 { background: var(--t17); }
+  .line-head span.stop { color: var(--muted); font-size: 0.8rem; }
+  table { width: 100%; border-collapse: separate; border-spacing: 0 6px; }
+  td {
+    background: var(--row);
+    padding: 10px 12px;
+    font-size: 1.05rem;
+  }
+  td:first-child { border-radius: 10px 0 0 10px; }
+  td:last-child { border-radius: 0 10px 10px 0; text-align: right; font-weight: 700; white-space: nowrap; }
+  td .dest { display: block; color: var(--muted); font-size: 0.72rem; margin-top: 1px; }
+  .status { text-align: center; color: var(--muted); font-size: 0.75rem; }
+  .error { color: #ff8a80; }
+  .now { color: var(--u4); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Arabellapark</h1>
+  <p>Nächste Abfahrten</p>
+</header>
+
+<section>
+  <div class="line-head"><span class="badge u4">U4</span><span class="stop">Arabellapark</span></div>
+  <table><tbody id="u4-rows"><tr><td colspan="2">Laden…</td></tr></tbody></table>
+</section>
+
+<section>
+  <div class="line-head"><span class="badge t17">17</span><span class="stop">Arabellapark / Klinikum Bogenhausen</span></div>
+  <table><tbody id="t17-rows"><tr><td colspan="2">Laden…</td></tr></tbody></table>
+</section>
+
+<p class="status" id="status"></p>
+
+<script>
+const API = "https://www.mvg.de/api/bgw-pt/v3/departures";
+const STOPS = [
+  { globalId: "de:09162:670", label: "U4", tbody: "u4-rows" },  // U-Bahn Arabellapark
+  // Tram Arabellapark/Klinikum Bogenh. — only towards Effnerplatz (city-bound), i.e. not towards St. Emmeram
+  { globalId: "de:09162:655", label: "17", tbody: "t17-rows", excludeDestination: "St. Emmeram" }
+];
+const MAX = 4;
+
+function minutesUntil(ts) {
+  return Math.max(0, Math.round((ts - Date.now()) / 60000));
+}
+
+function render(tbodyId, label, deps) {
+  const tbody = document.getElementById(tbodyId);
+  if (!deps.length) {
+    tbody.innerHTML = '<tr><td colspan="2">Keine Abfahrten gefunden</td></tr>';
+    return;
+  }
+  tbody.innerHTML = deps.map(d => {
+    const min = minutesUntil(d.realtimeDepartureTime || d.plannedDepartureTime);
+    const when = min === 0 ? '<span class="now">jetzt</span>' : "in " + min + " min";
+    return '<tr><td>' + label +
+      '<span class="dest">→ ' + d.destination + '</span></td>' +
+      '<td>' + when + '</td></tr>';
+  }).join("");
+}
+
+async function loadStop(stop) {
+  const res = await fetch(API + "?globalId=" + stop.globalId + "&limit=40");
+  if (!res.ok) throw new Error("HTTP " + res.status);
+  const data = await res.json();
+  const deps = data
+    .filter(d => d.label === stop.label && !d.cancelled)
+    .filter(d => !stop.excludeDestination || d.destination !== stop.excludeDestination)
+    .filter(d => (d.realtimeDepartureTime || d.plannedDepartureTime) > Date.now() - 30000)
+    .sort((a, b) => (a.realtimeDepartureTime || a.plannedDepartureTime) - (b.realtimeDepartureTime || b.plannedDepartureTime))
+    .slice(0, MAX);
+  render(stop.tbody, stop.label, deps);
+}
+
+async function refresh() {
+  const status = document.getElementById("status");
+  try {
+    await Promise.all(STOPS.map(loadStop));
+    status.className = "status";
+    status.textContent = "Stand: " + new Date().toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  } catch (e) {
+    status.className = "status error";
+    status.textContent = "Daten konnten nicht geladen werden – neuer Versuch gleich.";
+  }
+}
+
+refresh();
+setInterval(refresh, 30000);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) refresh();
+});
+</script>
+</body>
+</html>
